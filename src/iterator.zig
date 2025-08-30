@@ -5,6 +5,7 @@ const lib = @import("lib.zig");
 const Allocator = std.mem.Allocator;
 
 const Data = lib.Data;
+const ErrorHandler = lib.ErrorHandler;
 
 const general_freer = lib.data.general_freer;
 
@@ -22,23 +23,23 @@ pub const Iterator = struct {
         self.raw.deinit();
     }
 
-    pub fn next(self: *Self, err_str: *?Data) error{RocksDBIterator}!?[2]Data {
-        return self.nextGeneric([2]Data, RawIterator.entry, err_str);
+    pub fn next(self: *Self, error_handler: ErrorHandler) error{RocksDBIterator}!?[2]Data {
+        return self.nextGeneric([2]Data, RawIterator.entry, error_handler);
     }
 
-    pub fn nextKey(self: *Self, err_str: *?Data) error{RocksDBIterator}!?Data {
-        return self.nextGeneric(Data, RawIterator.key, err_str);
+    pub fn nextKey(self: *Self, error_handler: ErrorHandler) error{RocksDBIterator}!?Data {
+        return self.nextGeneric(Data, RawIterator.key, error_handler);
     }
 
-    pub fn nextValue(self: *Self, err_str: *?Data) error{RocksDBIterator}!?Data {
-        return self.nextGeneric(Data, RawIterator.value, err_str);
+    pub fn nextValue(self: *Self, error_handler: ErrorHandler) error{RocksDBIterator}!?Data {
+        return self.nextGeneric(Data, RawIterator.value, error_handler);
     }
 
     fn nextGeneric(
         self: *Self,
         comptime T: type,
         getNext: fn (RawIterator) ?T,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) error{RocksDBIterator}!?T {
         if (self.done) {
             return null;
@@ -57,7 +58,7 @@ pub const Iterator = struct {
                 return item;
             } else {
                 self.done = true;
-                try self.raw.status(err_str);
+                try self.raw.status(error_handler);
                 return null;
             }
         }
@@ -143,14 +144,11 @@ pub const RawIterator = struct {
         rdb.rocksdb_iter_prev(self.inner);
     }
 
-    pub fn status(self: Self, err_str: *?Data) error{RocksDBIterator}!void {
+    pub fn status(self: Self, error_handler: ErrorHandler) error{RocksDBIterator}!void {
         var err_str_in: ?[*:0]u8 = null;
         rdb.rocksdb_iter_get_error(self.inner, @ptrCast(&err_str_in));
         if (err_str_in) |s| {
-            err_str.* = .{
-                .data = std.mem.span(s),
-                .free = rdb.rocksdb_free,
-            };
+            error_handler.handle(error.RocksDBIterator, s);
             return error.RocksDBIterator;
         }
     }

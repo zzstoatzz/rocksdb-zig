@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const RwLock = std.Thread.RwLock;
 
 const Data = lib.Data;
+const ErrorHandler = lib.ErrorHandler;
 const Iterator = lib.Iterator;
 const IteratorDirection = lib.IteratorDirection;
 const RawIterator = lib.RawIterator;
@@ -26,7 +27,7 @@ pub const DB = struct {
         dir: []const u8,
         db_options: DBOptions,
         maybe_column_families: ?[]const ColumnFamilyDescription,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) (Allocator.Error || error{RocksDBOpen})!struct { Self, []const ColumnFamily } {
         const column_families = if (maybe_column_families) |cfs|
             cfs
@@ -46,7 +47,7 @@ pub const DB = struct {
                 cf_names[i] = @ptrCast(cf.name.ptr);
                 cf_options[i] = cf.options.convert();
             }
-            var ch = CallHandler.init(err_str);
+            var ch = CallHandler.init(error_handler);
             break :db try ch.handle(rdb.rocksdb_open_column_families(
                 db_options.convert(),
                 dir.ptr,
@@ -101,10 +102,10 @@ pub const DB = struct {
     pub fn createColumnFamily(
         self: *Self,
         name: []const u8,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) !ColumnFamilyHandle {
         const options = rdb.rocksdb_options_create();
-        var ch = CallHandler.init(err_str);
+        var ch = CallHandler.init(error_handler);
         const handle = (try ch.handle(rdb.rocksdb_create_column_family(
             self.db,
             options,
@@ -127,11 +128,11 @@ pub const DB = struct {
         column_family: ?ColumnFamilyHandle,
         key: []const u8,
         value: []const u8,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) error{RocksDBPut}!void {
         const options = rdb.rocksdb_writeoptions_create();
         defer rdb.rocksdb_writeoptions_destroy(options);
-        var ch = CallHandler.init(err_str);
+        var ch = CallHandler.init(error_handler);
         try ch.handle(rdb.rocksdb_put_cf(
             self.db,
             options,
@@ -148,12 +149,12 @@ pub const DB = struct {
         self: *const Self,
         column_family: ?ColumnFamilyHandle,
         key: []const u8,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) error{RocksDBGet}!?Data {
         var valueLength: usize = 0;
         const options = rdb.rocksdb_readoptions_create();
         defer rdb.rocksdb_readoptions_destroy(options);
-        var ch = CallHandler.init(err_str);
+        var ch = CallHandler.init(error_handler);
         const value = try ch.handle(rdb.rocksdb_get_cf(
             self.db,
             options,
@@ -176,11 +177,11 @@ pub const DB = struct {
         self: *const Self,
         column_family: ?ColumnFamilyHandle,
         key: []const u8,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) error{RocksDBDelete}!void {
         const options = rdb.rocksdb_writeoptions_create();
         defer rdb.rocksdb_writeoptions_destroy(options);
-        var ch = CallHandler.init(err_str);
+        var ch = CallHandler.init(error_handler);
         try ch.handle(rdb.rocksdb_delete_cf(
             self.db,
             options,
@@ -196,9 +197,9 @@ pub const DB = struct {
         column_family: ?ColumnFamilyHandle,
         start_key: []const u8,
         limit_key: []const u8,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) error{RocksDBDeleteFilesInRange}!void {
-        var ch = CallHandler.init(err_str);
+        var ch = CallHandler.init(error_handler);
         try ch.handle(rdb.rocksdb_delete_file_in_range_cf(
             self.db,
             column_family orelse self.default_cf,
@@ -288,11 +289,11 @@ pub const DB = struct {
     pub fn write(
         self: *const Self,
         batch: WriteBatch,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) error{RocksDBWrite}!void {
         const options = rdb.rocksdb_writeoptions_create();
         defer rdb.rocksdb_writeoptions_destroy(options);
-        var ch = CallHandler.init(err_str);
+        var ch = CallHandler.init(error_handler);
         try ch.handle(rdb.rocksdb_write(
             self.db,
             options,
@@ -304,11 +305,11 @@ pub const DB = struct {
     pub fn flush(
         self: *const Self,
         column_family: ?ColumnFamilyHandle,
-        err_str: *?Data,
+        error_handler: ErrorHandler,
     ) error{RocksDBFlush}!void {
         const options = rdb.rocksdb_flushoptions_create();
         defer rdb.rocksdb_flushoptions_destroy(options);
-        var ch = CallHandler.init(err_str);
+        var ch = CallHandler.init(error_handler);
         const e = error.RocksDBFlush;
         if (column_family) |cf|
             try ch.handle(rdb.rocksdb_flush_cf(self.db, options, cf, @ptrCast(&ch.err_str_in)), e)
@@ -432,14 +433,10 @@ const CallHandler = struct {
     /// The error string to pass into rocksdb.
     err_str_in: ?[*:0]u8 = null,
     /// The user's error string.
-    err_str_out: *?Data,
+    handler: ErrorHandler,
 
-    fn init(err_str_out: *?Data) CallHandler {
-        return .{ .err_str_out = err_str_out };
-    }
-
-    fn errIn(self: *CallHandler) [*c][*c]u8 {
-        return @ptrCast(&self.err_str_in);
+    fn init(handler: ErrorHandler) CallHandler {
+        return .{ .handler = handler };
     }
 
     fn handle(
@@ -448,10 +445,7 @@ const CallHandler = struct {
         comptime err: anytype,
     ) @TypeOf(err)!@TypeOf(ret) {
         if (self.err_str_in) |s| {
-            self.err_str_out.* = .{
-                .data = std.mem.span(s),
-                .free = rdb.rocksdb_free,
-            };
+            self.handler.handle(err, s);
             return err;
         } else {
             return ret;
@@ -505,13 +499,13 @@ const CfNameToHandleMap = struct {
 test DB {
     var err_str: ?Data = null;
     defer if (err_str) |e| e.deinit();
-    runTest(&err_str) catch |e| {
+    runTest(.{ .write = &err_str }) catch |e| {
         std.debug.print("{}: {?}\n", .{ e, err_str });
         return e;
     };
 }
 
-fn runTest(err_str: *?Data) !void {
+fn runTest(err_str: ErrorHandler) !void {
     {
         var db, const families = try DB.open(
             std.testing.allocator,

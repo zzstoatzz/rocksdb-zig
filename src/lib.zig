@@ -14,9 +14,12 @@ pub const Data = data.Data;
 
 pub const WriteBatch = batch.WriteBatch;
 
+pub const ErrorHandler = errors.ErrorHandler;
+
 ////////////
 // private
 pub const batch = @import("batch.zig");
+const errors = @import("errors.zig");
 pub const data = @import("data.zig");
 pub const database = @import("database.zig");
 pub const iterator = @import("iterator.zig");
