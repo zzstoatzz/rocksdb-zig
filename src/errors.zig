@@ -1,6 +1,6 @@
 const std = @import("std");
 const rdb = @import("rocksdb");
-const lib = @import("lib.zig");
+const lib = @import("root.zig");
 
 const Data = lib.Data;
 
@@ -40,6 +40,30 @@ pub const ErrorHandler = union(enum) {
                 item.impl(item.ctx, err, data.data);
                 data.deinit();
             },
+        }
+    }
+};
+
+pub const CallHandler = struct {
+    /// The error string to pass into rocksdb.
+    err_str_in: ?[*:0]u8 = null,
+    /// The user's error string.
+    handler: ErrorHandler,
+
+    pub fn init(handler: ErrorHandler) CallHandler {
+        return .{ .handler = handler };
+    }
+
+    pub fn handle(
+        self: *CallHandler,
+        ret: anytype,
+        comptime err: anytype,
+    ) @TypeOf(err)!@TypeOf(ret) {
+        if (self.err_str_in) |s| {
+            self.handler.handle(err, s);
+            return err;
+        } else {
+            return ret;
         }
     }
 };

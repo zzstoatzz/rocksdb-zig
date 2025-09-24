@@ -1,10 +1,12 @@
 const std = @import("std");
 const rdb = @import("rocksdb");
-const lib = @import("lib.zig");
+const lib = @import("root.zig");
+const private = @import("private.zig");
 
 const Allocator = std.mem.Allocator;
 const RwLock = std.Thread.RwLock;
 
+const CallHandler = private.errors.CallHandler;
 const Data = lib.Data;
 const ErrorHandler = lib.ErrorHandler;
 const Iterator = lib.Iterator;
@@ -426,30 +428,6 @@ pub const LiveFile = struct {
         self.allocator.free(self.name);
         if (self.start_key) |start_key| self.allocator.free(start_key);
         if (self.end_key) |end_key| self.allocator.free(end_key);
-    }
-};
-
-const CallHandler = struct {
-    /// The error string to pass into rocksdb.
-    err_str_in: ?[*:0]u8 = null,
-    /// The user's error string.
-    handler: ErrorHandler,
-
-    fn init(handler: ErrorHandler) CallHandler {
-        return .{ .handler = handler };
-    }
-
-    fn handle(
-        self: *CallHandler,
-        ret: anytype,
-        comptime err: anytype,
-    ) @TypeOf(err)!@TypeOf(ret) {
-        if (self.err_str_in) |s| {
-            self.handler.handle(err, s);
-            return err;
-        } else {
-            return ret;
-        }
     }
 };
 

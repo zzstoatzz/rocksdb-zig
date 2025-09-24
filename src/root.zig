@@ -18,13 +18,11 @@ pub const ErrorHandler = errors.ErrorHandler;
 
 ////////////
 // private
-pub const batch = @import("batch.zig");
-const errors = @import("errors.zig");
-pub const data = @import("data.zig");
-pub const database = @import("database.zig");
-pub const iterator = @import("iterator.zig");
+const private = @import("private.zig");
 
-test {
-    const std = @import("std");
-    std.testing.refAllDecls(@This());
-}
+const batch = private.batch;
+const errors = private.errors;
+const data = private.data;
+const database = private.database;
+const iterator = private.iterator;
+const transaction = private.transaction;

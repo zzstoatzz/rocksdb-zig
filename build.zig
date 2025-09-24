@@ -12,14 +12,14 @@ pub fn build(b: *Build) void {
     const bindings_mod = b.addModule("bindings", .{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/lib.zig"),
+        .root_source_file = b.path("src/root.zig"),
     });
     bindings_mod.addImport("rocksdb", rocksdb_mod);
 
     const tests = b.addTest(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/lib.zig"),
+        .root_source_file = b.path("src/root.zig"),
     });
     const test_step = b.step("test", "Run bindings tests");
     tests.root_module.addImport("rocksdb", rocksdb_mod);

@@ -1,6 +1,6 @@
 const std = @import("std");
 const rdb = @import("rocksdb");
-const lib = @import("lib.zig");
+const lib = @import("root.zig");
 
 const Allocator = std.mem.Allocator;
 
