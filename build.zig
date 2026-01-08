@@ -459,8 +459,10 @@ fn buildRocksDB(
     });
 
     if (enable_snappy) {
-        libsnappy.linkLibCpp();
         librocksdb.linkLibrary(libsnappy);
+        librocksdb.addIncludePath(snappy_dep.path("."));
+
+        libsnappy.linkLibCpp();
 
         const flags = .{
             "-std=c++11",
@@ -491,6 +493,7 @@ fn buildRocksDB(
         });
 
         libsnappy.addIncludePath(build_version.getOutput().dirname());
+        librocksdb.addIncludePath(build_version.getOutput().dirname());
     }
 
     // platform dependent stuff
