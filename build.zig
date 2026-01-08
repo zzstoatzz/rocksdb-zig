@@ -460,6 +460,14 @@ fn buildRocksDB(
 
     if (enable_snappy) {
         libsnappy.linkLibCpp();
+        librocksdb.linkLibrary(libsnappy);
+
+        const flags = .{
+            "-std=c++11",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-Wno-sign-compare",
+        };
 
         libsnappy.addCSourceFiles(.{
             .root = snappy_dep.path("."),
@@ -469,15 +477,23 @@ fn buildRocksDB(
                 "snappy-stubs-internal.cc",
                 "snappy.cc",
             },
-            .flags = &.{
-                "-std=c++11",
-                "-fno-exceptions",
-                "-fno-rtti",
-                "-Wno-sign-compare",
-            },
+            .flags = &flags,
         });
 
-        librocksdb.linkLibrary(libsnappy);
+        const build_version = b.addConfigHeader(.{
+            .style = .{ .cmake = snappy_dep.path("snappy-stubs-public.h.in") },
+            .include_path = "snappy-stubs-public.h",
+        }, .{
+            .PROJECT_VERSION_MAJOR = 1,
+            .PROJECT_VERSION_MINOR = 2,
+            .PROJECT_VERSION_PATCH = 2,
+            .HAVE_SYS_UIO_H_01 = 1,
+        });
+        libsnappy.addCSourceFile(.{
+            .file = build_version.getOutput(),
+            .language = .cpp,
+            .flags = &flags,
+        });
     }
 
     // platform dependent stuff
