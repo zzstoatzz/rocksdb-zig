@@ -26,6 +26,7 @@ pub const DB = struct {
         dir: []const u8,
         db_options: DBOptions,
         maybe_column_families: ?[]const ColumnFamilyDescription,
+        for_read_only: bool,
         err_str: *?Data,
     ) (Allocator.Error || error{RocksDBOpen})!struct { Self, []const ColumnFamily } {
         const column_families = if (maybe_column_families) |cfs|
@@ -48,7 +49,7 @@ pub const DB = struct {
             }
             var ch = CallHandler.init(err_str);
 
-            const ret = if (db_options.open_read_only)
+            const ret = if (for_read_only)
                 rdb.rocksdb_open_for_read_only_column_families(
                     db_options.convert(),
                     dir.ptr,
@@ -358,8 +359,6 @@ pub const DBOptions = struct {
     /// Dynamically changeable through SetDBOptions() API.
     max_open_files: i32 = -1,
 
-    open_read_only: bool = false,
-
     fn convert(do: DBOptions) *rdb.struct_rocksdb_options_t {
         const ro = rdb.rocksdb_options_create().?;
         rdb.rocksdb_options_set_create_if_missing(ro, @intFromBool(do.create_if_missing));
@@ -387,6 +386,7 @@ test "DB clean init and deinit" {
                     .create_missing_column_families = true,
                 },
                 null,
+                false,
                 &data,
             );
 
@@ -571,6 +571,7 @@ fn runTest(err_str: *?Data) !void {
                 .{ .name = "default" },
                 .{ .name = "another" },
             },
+            false,
             err_str,
         );
         defer db.deinit();
@@ -610,6 +611,7 @@ fn runTest(err_str: *?Data) !void {
             .{ .name = "default" },
             .{ .name = "another" },
         },
+        false,
         err_str,
     );
     defer db.deinit();
