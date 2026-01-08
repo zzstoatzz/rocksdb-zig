@@ -68,8 +68,18 @@ fn addRocksDB(
         }),
     });
 
-    try buildRocksDB(b, static_rocksdb, target);
-    try buildRocksDB(b, dynamic_rocksdb, target);
+    const snappy = b.addLibrary(.{
+        .name = "snappy",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .pic = if (force_pic == true) true else null,
+        }),
+    });
+
+    try buildRocksDB(b, static_rocksdb, snappy, target);
+    try buildRocksDB(b, dynamic_rocksdb, snappy, target);
 
     mod.addIncludePath(rocks_dep.path("include"));
     mod.linkLibrary(static_rocksdb);
@@ -81,10 +91,16 @@ fn addRocksDB(
 fn buildRocksDB(
     b: *Build,
     librocksdb: *std.Build.Step.Compile,
+    libsnappy: *std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
 ) !void {
+    // Ideally snappy could be an optional dependency, but Zig doesn't support them yet.
+    // Luckily building this is cheap.
+    const enable_snappy: bool = true;
+
     const t = target.result;
     const rocks_dep = b.dependency("rocksdb", .{});
+    const snappy_dep = b.dependency("snappy", .{});
 
     librocksdb.linkLibC();
     librocksdb.linkLibCpp();
@@ -431,13 +447,38 @@ fn buildRocksDB(
             "utilities/transactions/lock/range/range_tree/lib/util/dbt.cc",
             "utilities/transactions/lock/range/range_tree/lib/util/memarena.cc",
         },
-        .flags = &.{
+        .flags = @as([]const []const u8, &.{
             "-std=c++17",
             "-faligned-new",
             "-DHAVE_ALIGNED_NEW",
             "-DROCKSDB_UBSAN_RUN",
-        },
+        }) ++ @as([]const []const u8, if (enable_snappy)
+            &.{"-DSNAPPY=1"}
+        else
+            &.{}),
     });
+
+    if (enable_snappy) {
+        libsnappy.linkLibCpp();
+
+        libsnappy.addCSourceFiles(.{
+            .root = snappy_dep.path("."),
+            .files = &.{
+                "snappy-c.cc",
+                "snappy-sinksource.cc",
+                "snappy-stubs-internal.cc",
+                "snappy.cc",
+            },
+            .flags = &.{
+                "-std=c++11",
+                "-fno-exceptions",
+                "-fno-rtti",
+                "-Wno-sign-compare",
+            },
+        });
+
+        librocksdb.linkLibrary(libsnappy);
+    }
 
     // platform dependent stuff
     if (t.cpu.arch == .aarch64) {
