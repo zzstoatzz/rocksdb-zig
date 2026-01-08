@@ -47,15 +47,30 @@ pub const DB = struct {
                 cf_options[i] = cf.options.convert();
             }
             var ch = CallHandler.init(err_str);
-            break :db try ch.handle(rdb.rocksdb_open_column_families(
-                db_options.convert(),
-                dir.ptr,
-                @intCast(cf_names.len),
-                @ptrCast(cf_names.ptr),
-                @ptrCast(cf_options.ptr),
-                @ptrCast(cf_handles.ptr),
-                @ptrCast(&ch.err_str_in),
-            ), error.RocksDBOpen);
+
+            const ret = if (db_options.open_read_only)
+                rdb.rocksdb_open_for_read_only_column_families(
+                    db_options.convert(),
+                    dir.ptr,
+                    @intCast(cf_names.len),
+                    @ptrCast(cf_names.ptr),
+                    @ptrCast(cf_options.ptr),
+                    @ptrCast(cf_handles.ptr),
+                    0,
+                    @ptrCast(&ch.err_str_in),
+                )
+            else
+                rdb.rocksdb_open_column_families(
+                    db_options.convert(),
+                    dir.ptr,
+                    @intCast(cf_names.len),
+                    @ptrCast(cf_names.ptr),
+                    @ptrCast(cf_options.ptr),
+                    @ptrCast(cf_handles.ptr),
+                    @ptrCast(&ch.err_str_in),
+                );
+
+            break :db try ch.handle(ret, error.RocksDBOpen);
         };
 
         // organize column family metadata
@@ -342,6 +357,8 @@ pub const DBOptions = struct {
     ///
     /// Dynamically changeable through SetDBOptions() API.
     max_open_files: i32 = -1,
+
+    open_read_only: bool = false,
 
     fn convert(do: DBOptions) *rdb.struct_rocksdb_options_t {
         const ro = rdb.rocksdb_options_create().?;
