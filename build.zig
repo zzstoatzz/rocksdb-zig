@@ -489,11 +489,8 @@ fn buildRocksDB(
             .PROJECT_VERSION_PATCH = 2,
             .HAVE_SYS_UIO_H_01 = 1,
         });
-        libsnappy.addCSourceFile(.{
-            .file = build_version.getOutput(),
-            .language = .cpp,
-            .flags = &flags,
-        });
+
+        libsnappy.addIncludePath(build_version.getOutput().dirname());
     }
 
     // platform dependent stuff
