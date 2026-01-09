@@ -3,28 +3,18 @@ const Build = std.Build;
 const ResolvedTarget = Build.ResolvedTarget;
 const OptimizeMode = std.builtin.OptimizeMode;
 
-const Options = struct {
-    enable_snappy: bool,
-
-    fn init(b: *Build) Options {
-        return .{
-            .enable_snappy = b.option(
-                bool,
-                "enable_snappy",
-                "Enables and builds with the Snappy compressor",
-            ) orelse false,
-        };
-    }
-};
-
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const options: Options = .init(b);
+    const enable_snappy = b.option(
+        bool,
+        "enable_snappy",
+        "Enables and builds with the Snappy compressor",
+    ) orelse false;
 
     // RocksDB's translate-c module
-    const rocksdb_mod = try addRocksDB(b, target, optimize, options);
+    const rocksdb_mod = try addRocksDB(b, target, optimize, enable_snappy);
     const bindings_mod = b.addModule("bindings", .{
         .target = target,
         .optimize = optimize,
@@ -48,7 +38,7 @@ fn addRocksDB(
     b: *Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
-    options: Options,
+    enable_snappy: bool,
 ) !*Build.Module {
     const rocks_dep = b.dependency("rocksdb", .{});
 
@@ -85,7 +75,7 @@ fn addRocksDB(
         }),
     });
 
-    const maybe_libsnappy = if (options.enable_snappy) b.addLibrary(.{
+    const maybe_libsnappy = if (enable_snappy) b.addLibrary(.{
         .name = "snappy",
         .linkage = .static,
         .root_module = b.createModule(.{
