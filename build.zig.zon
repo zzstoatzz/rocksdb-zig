@@ -11,6 +11,7 @@
         .snappy = .{
             .url = "git+https://github.com/google/snappy#25e52c58fbf83ee40f4c9284f757f777f691f76f",
             .hash = "N-V-__8AADcwMwCa__yeHfNDwYl4KEDbkj-VwAqY844Nblr8",
+            .lazy = true,
         },
     },
     .paths = .{

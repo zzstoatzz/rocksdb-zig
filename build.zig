@@ -3,12 +3,28 @@ const Build = std.Build;
 const ResolvedTarget = Build.ResolvedTarget;
 const OptimizeMode = std.builtin.OptimizeMode;
 
-pub fn build(b: *Build) void {
+const Options = struct {
+    enable_snappy: bool,
+
+    fn init(b: *Build) Options {
+        return .{
+            .enable_snappy = b.option(
+                bool,
+                "enable_snappy",
+                "Enables and builds with the Snappy compressor",
+            ) orelse false,
+        };
+    }
+};
+
+pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const options: Options = .init(b);
+
     // RocksDB's translate-c module
-    const rocksdb_mod = addRocksDB(b, target, optimize);
+    const rocksdb_mod = try addRocksDB(b, target, optimize, options);
     const bindings_mod = b.addModule("bindings", .{
         .target = target,
         .optimize = optimize,
@@ -32,7 +48,8 @@ fn addRocksDB(
     b: *Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
-) *Build.Module {
+    options: Options,
+) !*Build.Module {
     const rocks_dep = b.dependency("rocksdb", .{});
 
     const translate_c = b.addTranslateC(.{
@@ -68,7 +85,7 @@ fn addRocksDB(
         }),
     });
 
-    const snappy = b.addLibrary(.{
+    const maybe_libsnappy = if (options.enable_snappy) b.addLibrary(.{
         .name = "snappy",
         .linkage = .static,
         .root_module = b.createModule(.{
@@ -76,10 +93,10 @@ fn addRocksDB(
             .optimize = optimize,
             .pic = if (force_pic == true) true else null,
         }),
-    });
+    }) else null;
 
-    try buildRocksDB(b, static_rocksdb, snappy, target);
-    try buildRocksDB(b, dynamic_rocksdb, snappy, target);
+    try buildRocksDB(b, static_rocksdb, maybe_libsnappy, target);
+    try buildRocksDB(b, dynamic_rocksdb, maybe_libsnappy, target);
 
     mod.addIncludePath(rocks_dep.path("include"));
     mod.linkLibrary(static_rocksdb);
@@ -91,19 +108,24 @@ fn addRocksDB(
 fn buildRocksDB(
     b: *Build,
     librocksdb: *std.Build.Step.Compile,
-    libsnappy: *std.Build.Step.Compile,
+    maybe_libsnappy: ?*std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
 ) !void {
-    // Ideally snappy could be an optional dependency, but Zig doesn't support them yet.
-    // Luckily building this is cheap.
-    const enable_snappy: bool = true;
-
     const t = target.result;
     const rocks_dep = b.dependency("rocksdb", .{});
-    const snappy_dep = b.dependency("snappy", .{});
 
     librocksdb.linkLibC();
     librocksdb.linkLibCpp();
+
+    var rocksdb_flags: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer rocksdb_flags.deinit(b.allocator);
+    try rocksdb_flags.appendSlice(b.allocator, &.{
+        "-std=c++17",
+        "-faligned-new",
+        "-DHAVE_ALIGNED_NEW",
+        "-DROCKSDB_UBSAN_RUN",
+    });
+    if (maybe_libsnappy != null) try rocksdb_flags.append(b.allocator, "-DSNAPPY=1");
 
     librocksdb.addIncludePath(rocks_dep.path("include"));
     librocksdb.addIncludePath(rocks_dep.path("."));
@@ -447,18 +469,13 @@ fn buildRocksDB(
             "utilities/transactions/lock/range/range_tree/lib/util/dbt.cc",
             "utilities/transactions/lock/range/range_tree/lib/util/memarena.cc",
         },
-        .flags = @as([]const []const u8, &.{
-            "-std=c++17",
-            "-faligned-new",
-            "-DHAVE_ALIGNED_NEW",
-            "-DROCKSDB_UBSAN_RUN",
-        }) ++ @as([]const []const u8, if (enable_snappy)
-            &.{"-DSNAPPY=1"}
-        else
-            &.{}),
+        .flags = rocksdb_flags.items,
     });
 
-    if (enable_snappy) {
+    if (maybe_libsnappy) |libsnappy| not_yet_fetched: {
+        const snappy_dep = b.lazyDependency("snappy", .{}) orelse
+            break :not_yet_fetched;
+
         librocksdb.linkLibrary(libsnappy);
         librocksdb.addIncludePath(snappy_dep.path("."));
 
@@ -500,12 +517,7 @@ fn buildRocksDB(
     if (t.cpu.arch == .aarch64) {
         librocksdb.addCSourceFile(.{
             .file = rocks_dep.path("util/crc32c_arm64.cc"),
-            .flags = &.{
-                "-std=c++17",
-                "-faligned-new",
-                "-DHAVE_ALIGNED_NEW",
-                "-DROCKSDB_UBSAN_RUN",
-            },
+            .flags = rocksdb_flags.items,
         });
     }
 
@@ -520,11 +532,7 @@ fn buildRocksDB(
                 "env/fs_posix.cc",
                 "env/io_posix.cc",
             },
-            .flags = &.{
-                "-std=c++17",
-                "-faligned-new",
-                "-DHAVE_ALIGNED_NEW",
-            },
+            .flags = rocksdb_flags.items,
         });
     } else {
         @panic("TODO: support windows!");
