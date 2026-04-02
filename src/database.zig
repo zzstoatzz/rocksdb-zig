@@ -3,7 +3,25 @@ const rdb = @import("rocksdb");
 const lib = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const RwLock = std.Thread.RwLock;
+const c = std.c;
+
+// std.Thread.RwLock was removed in zig 0.16 — use pthread directly since we link libc.
+const RwLock = struct {
+    inner: c.pthread_rwlock_t = .{},
+
+    fn lock(self: *RwLock) void {
+        _ = c.pthread_rwlock_wrlock(&self.inner);
+    }
+    fn unlock(self: *RwLock) void {
+        _ = c.pthread_rwlock_unlock(&self.inner);
+    }
+    fn lockShared(self: *RwLock) void {
+        _ = c.pthread_rwlock_rdlock(&self.inner);
+    }
+    fn unlockShared(self: *RwLock) void {
+        _ = c.pthread_rwlock_unlock(&self.inner);
+    }
+};
 
 const Data = lib.Data;
 const Iterator = lib.Iterator;
