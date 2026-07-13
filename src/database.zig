@@ -47,6 +47,8 @@ pub const DB = struct {
         for_read_only: bool,
         err_str: *?Data,
     ) (Allocator.Error || error{RocksDBOpen})!struct { Self, []const ColumnFamily } {
+        const dir_z = try allocator.dupeZ(u8, dir);
+        defer allocator.free(dir_z);
         const column_families = if (maybe_column_families) |cfs|
             cfs
         else
@@ -70,7 +72,7 @@ pub const DB = struct {
             const ret = if (for_read_only)
                 rdb.rocksdb_open_for_read_only_column_families(
                     db_options.convert(),
-                    dir.ptr,
+                    dir_z.ptr,
                     @intCast(cf_names.len),
                     @ptrCast(cf_names.ptr),
                     @ptrCast(cf_options.ptr),
@@ -81,7 +83,7 @@ pub const DB = struct {
             else
                 rdb.rocksdb_open_column_families(
                     db_options.convert(),
-                    dir.ptr,
+                    dir_z.ptr,
                     @intCast(cf_names.len),
                     @ptrCast(cf_names.ptr),
                     @ptrCast(cf_options.ptr),
