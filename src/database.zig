@@ -164,7 +164,18 @@ pub const DB = struct {
         value: []const u8,
         err_str: *?Data,
     ) error{RocksDBPut}!void {
-        const options = rdb.rocksdb_writeoptions_create();
+        return self.putWithOptions(column_family, key, value, .{}, err_str);
+    }
+
+    pub fn putWithOptions(
+        self: *const Self,
+        column_family: ?ColumnFamilyHandle,
+        key: []const u8,
+        value: []const u8,
+        write_options: WriteOptions,
+        err_str: *?Data,
+    ) error{RocksDBPut}!void {
+        const options = write_options.convert();
         defer rdb.rocksdb_writeoptions_destroy(options);
         var ch = CallHandler.init(err_str);
         try ch.handle(rdb.rocksdb_put_cf(
@@ -213,7 +224,17 @@ pub const DB = struct {
         key: []const u8,
         err_str: *?Data,
     ) error{RocksDBDelete}!void {
-        const options = rdb.rocksdb_writeoptions_create();
+        return self.deleteWithOptions(column_family, key, .{}, err_str);
+    }
+
+    pub fn deleteWithOptions(
+        self: *const Self,
+        column_family: ?ColumnFamilyHandle,
+        key: []const u8,
+        write_options: WriteOptions,
+        err_str: *?Data,
+    ) error{RocksDBDelete}!void {
+        const options = write_options.convert();
         defer rdb.rocksdb_writeoptions_destroy(options);
         var ch = CallHandler.init(err_str);
         try ch.handle(rdb.rocksdb_delete_cf(
@@ -329,7 +350,18 @@ pub const DB = struct {
         batch: WriteBatch,
         err_str: *?Data,
     ) error{RocksDBWrite}!void {
-        const options = rdb.rocksdb_writeoptions_create();
+        return self.writeWithOptions(batch, .{}, err_str);
+    }
+
+    /// Atomically commit a write batch with explicit WAL durability policy.
+    /// `.sync = true` does not return until RocksDB has synced the WAL entry.
+    pub fn writeWithOptions(
+        self: *const Self,
+        batch: WriteBatch,
+        write_options: WriteOptions,
+        err_str: *?Data,
+    ) error{RocksDBWrite}!void {
+        const options = write_options.convert();
         defer rdb.rocksdb_writeoptions_destroy(options);
         var ch = CallHandler.init(err_str);
         try ch.handle(rdb.rocksdb_write(
@@ -353,6 +385,22 @@ pub const DB = struct {
             try ch.handle(rdb.rocksdb_flush_cf(self.db, options, cf, @ptrCast(&ch.err_str_in)), e)
         else
             try ch.handle(rdb.rocksdb_flush(self.db, options, @ptrCast(&ch.err_str_in)), e);
+    }
+};
+
+pub const WriteOptions = struct {
+    /// Sync the WAL before the write returns. This is the durability boundary
+    /// for metadata that acknowledges already-fsynced application data.
+    sync: bool = false,
+    /// Skip the WAL entirely. Mutually exclusive with `sync`.
+    disable_wal: bool = false,
+
+    fn convert(options: WriteOptions) *rdb.rocksdb_writeoptions_t {
+        std.debug.assert(!(options.sync and options.disable_wal));
+        const raw = rdb.rocksdb_writeoptions_create().?;
+        rdb.rocksdb_writeoptions_set_sync(raw, @intFromBool(options.sync));
+        rdb.rocksdb_writeoptions_disable_WAL(raw, @intFromBool(options.disable_wal));
+        return raw;
     }
 };
 
@@ -396,8 +444,10 @@ test "DB clean init and deinit" {
         pub fn run(allocator: Allocator) !void {
             var dir = std.testing.tmpDir(.{});
             defer dir.cleanup();
-            const path = try dir.dir.realpathAlloc(allocator, ".");
-            defer allocator.free(path);
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const path_len = try dir.dir.realPath(std.testing.io, &path_buf);
+            path_buf[path_len] = 0;
+            const path = path_buf[0..path_len :0];
 
             var data: ?Data = null;
             const db, const cfs = try DB.open(
@@ -438,6 +488,18 @@ test "DBOptions custom" {
     rdb.rocksdb_options_set_max_open_files(expected, 1234);
 
     try testDBOptions(subject, expected);
+}
+
+test "WriteOptions configure sync and WAL" {
+    const synced = (WriteOptions{ .sync = true }).convert();
+    defer rdb.rocksdb_writeoptions_destroy(synced);
+    try std.testing.expectEqual(@as(u8, 1), rdb.rocksdb_writeoptions_get_sync(synced));
+    try std.testing.expectEqual(@as(c_int, 0), rdb.rocksdb_writeoptions_get_disable_WAL(synced));
+
+    const unlogged = (WriteOptions{ .disable_wal = true }).convert();
+    defer rdb.rocksdb_writeoptions_destroy(unlogged);
+    try std.testing.expectEqual(@as(u8, 0), rdb.rocksdb_writeoptions_get_sync(unlogged));
+    try std.testing.expectEqual(@as(c_int, 1), rdb.rocksdb_writeoptions_get_disable_WAL(unlogged));
 }
 
 fn testDBOptions(test_subject: DBOptions, expected: *rdb.struct_rocksdb_options_t) !void {

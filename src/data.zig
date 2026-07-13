@@ -12,8 +12,8 @@ pub const Data = struct {
         self.free(@ptrCast(@constCast(self.data.ptr)));
     }
 
-    pub fn format(self: Data, writer: *std.io.Writer) !void {
-        try writer.print("{any}", .{self});
+    pub fn format(self: Data, writer: *std.Io.Writer) !void {
+        try writer.print("{s}", .{self.data});
     }
 };
 
