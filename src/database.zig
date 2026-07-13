@@ -36,6 +36,8 @@ pub const DB = struct {
     db: *rdb.rocksdb_t,
     default_cf: ?ColumnFamilyHandle = null,
     cf_name_to_handle: *CfNameToHandleMap,
+    allocator: Allocator,
+    option_resources: []ConvertedColumnFamilyOptions,
 
     const Self = @This();
 
@@ -56,6 +58,13 @@ pub const DB = struct {
 
         const cf_handles = try allocator.alloc(?ColumnFamilyHandle, column_families.len);
         defer allocator.free(cf_handles);
+        const raw_db_options = db_options.convert();
+        defer rdb.rocksdb_options_destroy(raw_db_options);
+
+        const converted_cf = try allocator.alloc(ConvertedColumnFamilyOptions, column_families.len);
+        errdefer allocator.free(converted_cf);
+        var converted_count: usize = 0;
+        errdefer for (converted_cf[0..converted_count]) |*options| options.deinit();
 
         // open database
         const db = db: {
@@ -65,13 +74,15 @@ pub const DB = struct {
             defer allocator.free(cf_names);
             for (column_families, 0..) |cf, i| {
                 cf_names[i] = @ptrCast(cf.name.ptr);
-                cf_options[i] = cf.options.convert();
+                converted_cf[i] = cf.options.convert();
+                converted_count += 1;
+                cf_options[i] = converted_cf[i].options;
             }
             var ch = CallHandler.init(err_str);
 
             const ret = if (for_read_only)
                 rdb.rocksdb_open_for_read_only_column_families(
-                    db_options.convert(),
+                    raw_db_options,
                     dir_z.ptr,
                     @intCast(cf_names.len),
                     @ptrCast(cf_names.ptr),
@@ -82,7 +93,7 @@ pub const DB = struct {
                 )
             else
                 rdb.rocksdb_open_column_families(
-                    db_options.convert(),
+                    raw_db_options,
                     dir_z.ptr,
                     @intCast(cf_names.len),
                     @ptrCast(cf_names.ptr),
@@ -110,7 +121,12 @@ pub const DB = struct {
         }
 
         return .{
-            Self{ .db = db.?, .cf_name_to_handle = cf_map },
+            Self{
+                .db = db.?,
+                .cf_name_to_handle = cf_map,
+                .allocator = allocator,
+                .option_resources = converted_cf,
+            },
             cf_list,
         };
     }
@@ -119,6 +135,8 @@ pub const DB = struct {
         return .{
             .db = self.db,
             .cf_name_to_handle = self.cf_name_to_handle,
+            .allocator = self.allocator,
+            .option_resources = self.option_resources,
             .default_cf = column_family,
         };
     }
@@ -127,6 +145,8 @@ pub const DB = struct {
     pub fn deinit(self: Self) void {
         self.cf_name_to_handle.destroy();
         rdb.rocksdb_close(self.db);
+        for (self.option_resources) |*options| options.deinit();
+        self.allocator.free(self.option_resources);
     }
 
     /// Delete the entire database from the filesystem.
@@ -141,6 +161,7 @@ pub const DB = struct {
         err_str: *?Data,
     ) !ColumnFamilyHandle {
         const options = rdb.rocksdb_options_create();
+        defer rdb.rocksdb_options_destroy(options);
         var ch = CallHandler.init(err_str);
         const handle = (try ch.handle(rdb.rocksdb_create_column_family(
             self.db,
@@ -528,8 +549,29 @@ pub const ColumnFamily = struct {
 pub const ColumnFamilyHandle = *rdb.rocksdb_column_family_handle_t;
 
 pub const ColumnFamilyOptions = struct {
-    fn convert(_: ColumnFamilyOptions) *rdb.struct_rocksdb_options_t {
-        return rdb.rocksdb_options_create().?;
+    /// Bits per key for a full Bloom filter. Null leaves RocksDB's default
+    /// table configuration unchanged.
+    bloom_bits_per_key: ?f64 = null,
+
+    fn convert(options: ColumnFamilyOptions) ConvertedColumnFamilyOptions {
+        const raw = rdb.rocksdb_options_create().?;
+        const bits = options.bloom_bits_per_key orelse return .{ .options = raw };
+        const block = rdb.rocksdb_block_based_options_create().?;
+        const filter = rdb.rocksdb_filterpolicy_create_bloom_full(bits).?;
+        rdb.rocksdb_block_based_options_set_filter_policy(block, filter);
+        rdb.rocksdb_options_set_block_based_table_factory(raw, block);
+        // set_filter_policy transfers ownership of `filter` to `block`.
+        return .{ .options = raw, .block = block };
+    }
+};
+
+const ConvertedColumnFamilyOptions = struct {
+    options: *rdb.rocksdb_options_t,
+    block: ?*rdb.rocksdb_block_based_table_options_t = null,
+
+    fn deinit(self: *ConvertedColumnFamilyOptions) void {
+        rdb.rocksdb_options_destroy(self.options);
+        if (self.block) |block| rdb.rocksdb_block_based_options_destroy(block);
     }
 };
 
@@ -657,7 +699,7 @@ fn runTest(err_str: *?Data) !void {
             },
             &.{
                 .{ .name = "default" },
-                .{ .name = "another" },
+                .{ .name = "another", .options = .{ .bloom_bits_per_key = 10 } },
             },
             false,
             err_str,
@@ -697,7 +739,7 @@ fn runTest(err_str: *?Data) !void {
         },
         &.{
             .{ .name = "default" },
-            .{ .name = "another" },
+            .{ .name = "another", .options = .{ .bloom_bits_per_key = 10 } },
         },
         false,
         err_str,
