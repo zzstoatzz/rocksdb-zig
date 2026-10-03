@@ -49,7 +49,7 @@ pub const DB = struct {
         for_read_only: bool,
         err_str: *?Data,
     ) (Allocator.Error || error{RocksDBOpen})!struct { Self, []const ColumnFamily } {
-        const dir_z = try allocator.dupeZ(u8, dir);
+        const dir_z = try allocator.dupeSentinel(u8, dir, 0);
         defer allocator.free(dir_z);
         const column_families = if (maybe_column_families) |cfs|
             cfs
@@ -528,8 +528,8 @@ test "WriteOptions configure sync and WAL" {
 fn testDBOptions(test_subject: DBOptions, expected: *rdb.struct_rocksdb_options_t) !void {
     const actual = test_subject.convert();
 
-    inline for (@typeInfo(DBOptions).@"struct".fields) |field| {
-        const getter = "rocksdb_options_get_" ++ field.name;
+    inline for (@typeInfo(DBOptions).@"struct".field_names) |name| {
+        const getter = "rocksdb_options_get_" ++ name;
         const expected_value = @call(.auto, @field(rdb, getter), .{expected});
         const actual_value = @call(.auto, @field(rdb, getter), .{actual});
         try std.testing.expectEqual(expected_value, actual_value);
